@@ -40,6 +40,7 @@ export function CredentialRequestDialog({
     const { create } = useCredentialCommands()
 
     const [requestedType, setRequestedType] = useState('')
+    const [requestedIssuer, setRequestedIssuer] = useState('')
     const [registryAdmin, setRegistryAdmin] = useState(
         credentialConfig.registryAdmin
     )
@@ -125,12 +126,16 @@ export function CredentialRequestDialog({
     const apply = (suggestion: CredentialTypeSuggestion) => {
         setSelectedKey(suggestionKey(suggestion))
         setRequestedType(suggestion.requestedType)
+        setRequestedIssuer(
+            suggestion.issuerKind === 'party' ? suggestion.issuer : ''
+        )
         setRegistryAdmin(suggestion.registryAdmin)
         setAnchorers(suggestion.anchorers.join(', '))
     }
 
     const reset = () => {
         setRequestedType('')
+        setRequestedIssuer('')
         setRegistryAdmin(credentialConfig.registryAdmin)
         setAnchorers(credentialConfig.anchorers.join(', '))
         setSelectedKey(null)
@@ -156,6 +161,7 @@ export function CredentialRequestDialog({
         try {
             await create.mutateAsync({
                 party: partyId,
+                requestedIssuer,
                 requestedType,
                 registryAdmin,
                 anchorers: parsedAnchorers,
@@ -190,17 +196,19 @@ export function CredentialRequestDialog({
                 {submitted ? (
                     <Alert severity="success">
                         Credential request submitted for type {requestedType}.
-                        It is routed to the registry admin and the anchorers.
+                        It is addressed to {requestedIssuer}; the issuer can
+                        approve and issue directly.
                     </Alert>
                 ) : (
                     <>
                         <Alert severity="info" sx={{ mb: 2 }}>
                             Suggestions are based on credentials visible to this
                             wallet; not an issuer catalogue. The request carries
-                            only the type and its routing parties, and the
-                            protocol has no issuer field, so it is addressed to
-                            the registry admin and the anchorers rather than to
-                            the issuer itself.
+                            only the type and requested issuer plus routing
+                            parties, not claims or a subject. The issuer can
+                            approve directly when it is the sole anchorer; other
+                            anchorers need separate authorization not supported
+                            here.
                         </Alert>
                         {registryNote && (
                             <Alert severity="warning" sx={{ mb: 2 }}>
@@ -304,6 +312,14 @@ export function CredentialRequestDialog({
                                 ))}
                             </datalist>
                             <TextField
+                                label="Requested issuer (full Party ID)"
+                                value={requestedIssuer}
+                                onChange={(event) =>
+                                    setRequestedIssuer(event.target.value)
+                                }
+                                helperText="Choose a Party issuer suggestion or enter its full Canton Party ID. Must be an anchorer."
+                            />
+                            <TextField
                                 label="Registry admin"
                                 value={registryAdmin}
                                 onChange={(event) =>
@@ -317,7 +333,7 @@ export function CredentialRequestDialog({
                                 onChange={(event) =>
                                     setAnchorers(event.target.value)
                                 }
-                                helperText="Also observers of the request. An issuer must be one of these to answer with an offer."
+                                helperText="The issuer must be included. Direct approval requires the issuer to be the sole anchorer."
                             />
                         </Box>
 
@@ -342,8 +358,9 @@ export function CredentialRequestDialog({
                             create.isPending ||
                             !partyId ||
                             !requestedType.trim() ||
+                            !/^.+::.+$/.test(requestedIssuer.trim()) ||
                             !registryAdmin.trim() ||
-                            parsedAnchorers.length === 0
+                            !parsedAnchorers.includes(requestedIssuer.trim())
                         }
                         onClick={() => void submit()}
                     >

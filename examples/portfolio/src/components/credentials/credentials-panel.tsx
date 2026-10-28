@@ -80,6 +80,11 @@ export function CredentialsPanel() {
                             Requested type: {request.requestedType}
                         </Typography>
                         <Typography>
+                            {request.version === 'current'
+                                ? `Requested issuer: ${request.requestedIssuer}`
+                                : 'Old package request: no requested issuer; cannot use direct approval.'}
+                        </Typography>
+                        <Typography>
                             Registry admin: {request.registryAdmin}
                         </Typography>
                         <Typography>
@@ -92,6 +97,7 @@ export function CredentialsPanel() {
                                     commands.cancel.mutateAsync({
                                         party: partyId,
                                         requestId: request.contractId,
+                                        version: request.version,
                                     })
                                 )
                             }

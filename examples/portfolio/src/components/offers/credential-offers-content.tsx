@@ -52,7 +52,11 @@ export function CredentialOffersContent() {
                             <OfferRowGrid columns={4}>
                                 <OfferDetailBlock
                                     label="Type"
-                                    value="Credential Offer"
+                                    value={
+                                        pending.request == null
+                                            ? 'Unsolicited credential offer'
+                                            : 'Request-backed credential offer'
+                                    }
                                 />
                                 <OfferDetailBlock
                                     label="Requested Type"
@@ -82,7 +86,9 @@ export function CredentialOffersContent() {
                                             setOffer(pending)
                                         }}
                                     >
-                                        Accept
+                                        {pending.request == null
+                                            ? 'Accept unsolicited offer'
+                                            : 'Accept request-backed offer'}
                                     </Button>
                                     <Button
                                         disabled={
@@ -95,6 +101,7 @@ export function CredentialOffersContent() {
                                                 .mutateAsync({
                                                     party: partyId,
                                                     offerId: pending.contractId,
+                                                    version: pending.version,
                                                 })
                                                 .catch((cause: unknown) =>
                                                     setActionError(

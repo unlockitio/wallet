@@ -24,6 +24,7 @@ import { useAccounts, usePrimaryAccount } from '@hooks/useAccounts'
 import { useCredentialCommands } from '@hooks/useCredentialCommands'
 import { useCredentials } from '@hooks/useCredentials'
 import {
+    approvalAvailable,
     claimKeyError,
     credentialTypesFor,
     missingOfferSignatories,
@@ -34,7 +35,11 @@ import { shortPartyId } from '@services/credential-view'
 import type { CredentialRequest } from '@services/credentials'
 import { emptyVisibilityMessage } from '@services/visibility-message'
 
-const STEPS = ['Select request', 'Credential details', 'Review & authorize']
+const STEPS = [
+    'Select issuance path',
+    'Credential details',
+    'Review & authorize',
+]
 
 // A `datetime-local` value has no zone, so it is read in the browser's zone and sent
 // as the instant the issuer actually picked.
@@ -60,6 +65,15 @@ export function CredentialIssueDialog({
 
     const [step, setStep] = useState(0)
     const [requestId, setRequestId] = useState('')
+    const [mode, setMode] = useState<'offer' | 'approve'>('offer')
+    const [holder, setHolder] = useState('')
+    const [requestedType, setRequestedType] = useState('')
+    const [registryAdmin, setRegistryAdmin] = useState(
+        credentialConfig.registryAdmin
+    )
+    const [anchorers, setAnchorers] = useState(
+        credentialConfig.anchorers.join(', ')
+    )
     const [factory, setFactory] = useState('')
     const [extraType, setExtraType] = useState('')
     const [extraTypes, setExtraTypes] = useState<string[]>([])
@@ -69,7 +83,7 @@ export function CredentialIssueDialog({
     const [validUntil, setValidUntil] = useState('')
     const [credentialId, setCredentialId] = useState('')
     const [registrationExpiresAt, setRegistrationExpiresAt] = useState('')
-    const [offerId, setOfferId] = useState<string | null>(null)
+    const [submittedId, setSubmittedId] = useState<string | null>(null)
     const [actionError, setActionError] = useState('')
 
     const request = useMemo(
@@ -84,16 +98,16 @@ export function CredentialIssueDialog({
         () =>
             data.factories.filter(
                 (candidate) =>
-                    candidate.registryAdmin === request?.registryAdmin
+                    candidate.version === 'current' &&
+                    candidate.registryAdmin === registryAdmin
             ),
-        [data.factories, request]
+        [data.factories, registryAdmin]
     )
     // The configured factory is only offered when its registry admin is the one the
     // request routes to; the template rejects any other.
     const configuredFactory =
         credentialConfig.factory &&
-        request &&
-        request.registryAdmin === credentialConfig.registryAdmin
+        registryAdmin === credentialConfig.registryAdmin
             ? credentialConfig.factory
             : ''
     const factoryOptions = useMemo(
@@ -106,8 +120,17 @@ export function CredentialIssueDialog({
     )
 
     const issuer = partyId ?? ''
-    const issuerIsAnchorer = !!request && request.anchorers.includes(issuer)
-    const required = request ? requiredOfferSignatories(request, issuer) : []
+    const parsedAnchorers = anchorers
+        .split(',')
+        .map((party) => party.trim())
+        .filter(Boolean)
+    const issuerIsAnchorer = parsedAnchorers.includes(issuer)
+    const canApprove = !!request && approvalAvailable(request, issuer)
+    const required = requiredOfferSignatories({
+        anchorers: parsedAnchorers,
+        issuer,
+        registryAdmin,
+    })
     const controlled = useMemo(
         () => accounts.map((account) => account.partyId as string),
         [accounts]
@@ -123,13 +146,26 @@ export function CredentialIssueDialog({
         usedClaims.length
     const detailsValid =
         issuerIsAnchorer &&
+        /^.+::.+$/.test(holder.trim()) &&
+        !!requestedType.trim() &&
+        !!registryAdmin.trim() &&
+        (mode === 'offer' || canApprove) &&
         !!factory.trim() &&
+        (factories.some((entry) => entry.contractId === factory) ||
+            (mode === 'offer' &&
+                !!configuredFactory &&
+                factory === configuredFactory)) &&
         claimErrors.length === 0 &&
         !duplicateClaimKeys
 
     const reset = () => {
         setStep(0)
         setRequestId('')
+        setMode('offer')
+        setHolder('')
+        setRequestedType('')
+        setRegistryAdmin(credentialConfig.registryAdmin)
+        setAnchorers(credentialConfig.anchorers.join(', '))
         setFactory('')
         setExtraType('')
         setExtraTypes([])
@@ -139,7 +175,7 @@ export function CredentialIssueDialog({
         setValidUntil('')
         setCredentialId('')
         setRegistrationExpiresAt('')
-        setOfferId(null)
+        setSubmittedId(null)
         setActionError('')
         issue.reset()
     }
@@ -152,11 +188,18 @@ export function CredentialIssueDialog({
 
     const selectRequest = (candidate: CredentialRequest) => {
         setRequestId(candidate.contractId)
+        setMode('approve')
+        setHolder(candidate.holder)
+        setRequestedType(candidate.requestedType)
+        setRegistryAdmin(candidate.registryAdmin)
+        setAnchorers(candidate.anchorers.join(', '))
         setSubjectId(candidate.holder)
         const [onlyFactory] = candidate.registryAdmin
             ? data.factories
                   .filter(
-                      (entry) => entry.registryAdmin === candidate.registryAdmin
+                      (entry) =>
+                          entry.version === 'current' &&
+                          entry.registryAdmin === candidate.registryAdmin
                   )
                   .map((entry) => entry.contractId)
             : []
@@ -170,12 +213,18 @@ export function CredentialIssueDialog({
     }
 
     const submit = async () => {
-        if (!request || !partyId) return
+        if (!partyId || !detailsValid || (mode === 'approve' && !request))
+            return
         setActionError('')
         try {
             const updateId = await issue.mutateAsync({
                 party: partyId,
-                request,
+                mode,
+                request: mode === 'approve' ? request : null,
+                holder: holder.trim(),
+                requestedType: requestedType.trim(),
+                registryAdmin: registryAdmin.trim(),
+                anchorers: parsedAnchorers,
                 issuer: partyId,
                 factory,
                 extraTypes,
@@ -189,7 +238,7 @@ export function CredentialIssueDialog({
                 registeredAt: new Date().toISOString(),
                 registrationExpiresAt: toInstant(registrationExpiresAt),
             })
-            setOfferId(updateId ?? 'submitted')
+            setSubmittedId(updateId ?? 'submitted')
         } catch (cause) {
             setActionError(
                 cause instanceof Error ? cause.message : String(cause)
@@ -209,8 +258,9 @@ export function CredentialIssueDialog({
                 <Box>
                     Issue credential
                     <Typography variant="body2" color="text.secondary">
-                        Creates an offer; the holder accepts it later. No
-                        credential exists until then.
+                        Default: unsolicited offer for holder acceptance. A
+                        current issuer-targeted request can instead be approved
+                        and issued directly.
                     </Typography>
                 </Box>
                 <IconButton
@@ -222,13 +272,14 @@ export function CredentialIssueDialog({
                 </IconButton>
             </DialogTitle>
             <DialogContent sx={{ overflowWrap: 'anywhere' }}>
-                {offerId ? (
+                {submittedId ? (
                     <Alert severity="success">
-                        Credential offer submitted. {request?.holder} must
-                        accept this offer before the credential is created.
-                        {offerId !== 'submitted' && (
+                        {mode === 'approve'
+                            ? `Request approved and credential issued to ${holder}. No second holder acceptance is required.`
+                            : `Offer submitted to ${holder}. The holder must accept with factory disclosure before issuance.`}
+                        {submittedId !== 'submitted' && (
                             <Typography variant="body2" sx={{ mt: 1 }}>
-                                Update ID: {offerId}
+                                Update ID: {submittedId}
                             </Typography>
                         )}
                     </Alert>
@@ -249,11 +300,12 @@ export function CredentialIssueDialog({
                                     color="text.secondary"
                                     sx={{ mb: 2 }}
                                 >
-                                    Issuance in this model answers a holder's
-                                    request. The request names the holder, the
-                                    requested type and the routing parties; an
-                                    unsolicited offer is not supported by the
-                                    current protocol.
+                                    Start an unsolicited offer by default, or
+                                    select a current request addressed to this
+                                    issuer to approve and issue directly. The
+                                    registry admin signs the factory; approval
+                                    does not imply that admin reviewed each
+                                    credential payload.
                                 </Typography>
                                 {isLoading && (
                                     <Typography>Loading requests…</Typography>
@@ -270,11 +322,8 @@ export function CredentialIssueDialog({
                                                     partyHint,
                                                 }
                                             )}{' '}
-                                            Issuance responds to a holder's
-                                            request, so there is nothing to
-                                            issue until a holder requests a
-                                            credential type routed to this
-                                            party.
+                                            Unsolicited offers remain available
+                                            without a request.
                                         </Alert>
                                     )}
                                 {data.incomingRequests.map((candidate) => (
@@ -297,29 +346,49 @@ export function CredentialIssueDialog({
                                             Anchorers:{' '}
                                             {candidate.anchorers.join(', ')}
                                         </Typography>
+                                        <Typography sx={{ mb: 1 }}>
+                                            {candidate.version === 'legacy'
+                                                ? 'Old package request: no requested issuer; cannot approve with the new choice.'
+                                                : `Requested issuer: ${candidate.requestedIssuer}${!approvalAvailable(candidate, issuer) ? '. Direct approval requires this primary issuer as sole anchorer.' : ''}`}
+                                        </Typography>
                                         <PillButton
+                                            disabled={
+                                                !approvalAvailable(
+                                                    candidate,
+                                                    issuer
+                                                )
+                                            }
                                             tone="neutral"
                                             onClick={() =>
                                                 selectRequest(candidate)
                                             }
                                         >
-                                            Select
+                                            Approve and issue
                                         </PillButton>
                                     </Paper>
                                 ))}
+                                <PillButton
+                                    onClick={() => {
+                                        setRequestId('')
+                                        setMode('offer')
+                                        setRegistryAdmin(
+                                            credentialConfig.registryAdmin
+                                        )
+                                        setFactory(credentialConfig.factory)
+                                        setStep(1)
+                                    }}
+                                >
+                                    Create unsolicited offer
+                                </PillButton>
                             </>
                         )}
 
-                        {step === 1 && request && (
+                        {step === 1 && (
                             <Box sx={{ display: 'grid', gap: 2 }}>
                                 {!issuerIsAnchorer && (
                                     <Alert severity="error">
-                                        This party ({issuer}) is not one of the
-                                        request anchorers (
-                                        {request.anchorers.join(', ')}). The
-                                        offer is signed by the issuer as an
-                                        anchorer, so only an anchorer of this
-                                        request can issue against it.
+                                        The issuer ({issuer}) must be an
+                                        anchorer ({parsedAnchorers.join(', ')}).
                                     </Alert>
                                 )}
                                 <Typography
@@ -329,6 +398,44 @@ export function CredentialIssueDialog({
                                     Issuer (this wallet's primary party)
                                 </Typography>
                                 <Typography>{issuer}</Typography>
+                                {mode === 'offer' && (
+                                    <>
+                                        <TextField
+                                            label="Holder (full Party ID)"
+                                            value={holder}
+                                            onChange={(event) =>
+                                                setHolder(event.target.value)
+                                            }
+                                        />
+                                        <TextField
+                                            label="Credential type"
+                                            value={requestedType}
+                                            onChange={(event) =>
+                                                setRequestedType(
+                                                    event.target.value
+                                                )
+                                            }
+                                        />
+                                        <TextField
+                                            label="Registry admin (full Party ID)"
+                                            value={registryAdmin}
+                                            onChange={(event) => {
+                                                setRegistryAdmin(
+                                                    event.target.value
+                                                )
+                                                setFactory('')
+                                            }}
+                                            helperText="Factory must be signed by this admin; the admin co-signs the offer."
+                                        />
+                                        <TextField
+                                            label="Anchorers (comma separated)"
+                                            value={anchorers}
+                                            onChange={(event) =>
+                                                setAnchorers(event.target.value)
+                                            }
+                                        />
+                                    </>
+                                )}
 
                                 <TextField
                                     select
@@ -339,8 +446,8 @@ export function CredentialIssueDialog({
                                     }
                                     helperText={
                                         factoryOptions.length === 0
-                                            ? 'No factory visible for this registry admin. Configure VITE_CREDENTIAL_FACTORY or have the registry admin disclose one.'
-                                            : 'Must be administered by the request registry admin.'
+                                            ? 'No factory visible for this registry admin. Configure VITE_CREDENTIAL_FACTORY only with a verified admin-signed factory ID; issuer approval needs visibility or explicit disclosure.'
+                                            : 'Must be administered by this registry admin. Approval requires the issuer to see the factory or receive explicit disclosure.'
                                     }
                                 >
                                     {factoryOptions.map((option) => (
@@ -367,7 +474,7 @@ export function CredentialIssueDialog({
                                         }}
                                     >
                                         {credentialTypesFor(
-                                            request.requestedType,
+                                            requestedType,
                                             extraTypes
                                         ).map((type) => (
                                             <Chip key={type} label={type} />
@@ -547,9 +654,8 @@ export function CredentialIssueDialog({
                                     variant="body2"
                                     color="text.secondary"
                                 >
-                                    Registration: registry admin{' '}
-                                    {request.registryAdmin}, registered at
-                                    submission time.
+                                    Registration: registry admin {registryAdmin}
+                                    , registered at submission time.
                                 </Typography>
                                 <TextField
                                     label="Registry retention expires at (optional)"
@@ -566,14 +672,15 @@ export function CredentialIssueDialog({
                             </Box>
                         )}
 
-                        {step === 2 && request && (
+                        {step === 2 && (
                             <Box sx={{ display: 'grid', gap: 2 }}>
                                 <Typography
                                     variant="body2"
                                     color="text.secondary"
                                 >
-                                    Required signatories (request anchorers,
-                                    issuer, registry admin)
+                                    {mode === 'approve'
+                                        ? 'Approval controller: requested issuer only'
+                                        : 'Offer signatories: anchorers, issuer and registry admin'}
                                 </Typography>
                                 <Box
                                     sx={{
@@ -582,7 +689,10 @@ export function CredentialIssueDialog({
                                         gap: 1,
                                     }}
                                 >
-                                    {required.map((party) => (
+                                    {(mode === 'approve'
+                                        ? [issuer]
+                                        : required
+                                    ).map((party) => (
                                         <Chip
                                             key={party}
                                             label={`${shortPartyId(party)} — ${
@@ -599,7 +709,7 @@ export function CredentialIssueDialog({
                                         />
                                     ))}
                                 </Box>
-                                {missing.length > 0 && (
+                                {mode === 'offer' && missing.length > 0 && (
                                     <Alert severity="error">
                                         This wallet user does not control{' '}
                                         {missing.join(', ')}. The offer is
@@ -610,8 +720,9 @@ export function CredentialIssueDialog({
                                     </Alert>
                                 )}
                                 <Alert severity="info">
-                                    {request.holder} must accept this offer
-                                    before the credential is created.
+                                    {mode === 'approve'
+                                        ? 'Issuer approval issues directly. The holder does not accept a second offer. The issuer must see the admin-signed factory.'
+                                        : 'Unsolicited offer: the holder must accept with explicit factory disclosure. The admin co-signs this offer, not a separate payload review.'}
                                 </Alert>
                                 <Typography
                                     variant="body2"
@@ -619,7 +730,7 @@ export function CredentialIssueDialog({
                                 >
                                     Holder
                                 </Typography>
-                                <Typography>{request.holder}</Typography>
+                                <Typography>{holder}</Typography>
                                 <Typography
                                     variant="body2"
                                     color="text.secondary"
@@ -628,7 +739,7 @@ export function CredentialIssueDialog({
                                 </Typography>
                                 <Typography>
                                     {credentialTypesFor(
-                                        request.requestedType,
+                                        requestedType,
                                         extraTypes
                                     ).join(', ')}
                                 </Typography>
@@ -673,7 +784,7 @@ export function CredentialIssueDialog({
                 )}
             </DialogContent>
             <DialogActions>
-                {!offerId && step > 0 && (
+                {!submittedId && step > 0 && (
                     <PillButton
                         tone="neutral"
                         disabled={issue.isPending}
@@ -682,7 +793,7 @@ export function CredentialIssueDialog({
                         Back
                     </PillButton>
                 )}
-                {!offerId && step === 1 && (
+                {!submittedId && step === 1 && (
                     <PillButton
                         disabled={!detailsValid}
                         onClick={() => setStep(2)}
@@ -690,17 +801,21 @@ export function CredentialIssueDialog({
                         Review
                     </PillButton>
                 )}
-                {!offerId && step === 2 && (
+                {!submittedId && step === 2 && (
                     <PillButton
                         disabled={
                             issue.isPending ||
-                            missing.length > 0 ||
+                            (mode === 'offer' && missing.length > 0) ||
                             !detailsValid ||
                             !partyId
                         }
                         onClick={() => void submit()}
                     >
-                        {issue.isPending ? 'Submitting…' : 'Create offer'}
+                        {issue.isPending
+                            ? 'Submitting…'
+                            : mode === 'approve'
+                              ? 'Approve and issue'
+                              : 'Create offer'}
                     </PillButton>
                 )}
                 <PillButton
@@ -708,7 +823,7 @@ export function CredentialIssueDialog({
                     disabled={issue.isPending}
                     onClick={close}
                 >
-                    {offerId ? 'Done' : 'Cancel'}
+                    {submittedId ? 'Done' : 'Cancel'}
                 </PillButton>
             </DialogActions>
         </Dialog>

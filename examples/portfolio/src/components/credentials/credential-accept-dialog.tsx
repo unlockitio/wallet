@@ -27,6 +27,7 @@ interface CredentialAcceptDialogProps {
         party: string
         offerId: string
         factoryId: string
+        version: 'current' | 'legacy'
         disclosure: FactoryDisclosure
     }) => void
 }
@@ -111,7 +112,11 @@ export function CredentialAcceptDialog({
             fullWidth
             maxWidth="sm"
         >
-            <DialogTitle>Accept credential offer</DialogTitle>
+            <DialogTitle>
+                {offer?.request == null
+                    ? 'Accept unsolicited credential offer'
+                    : 'Accept request-backed credential offer'}
+            </DialogTitle>
             <DialogContent sx={{ overflowWrap: 'anywhere' }}>
                 <Typography variant="body2" color="text.secondary">
                     Factory contract
@@ -189,6 +194,7 @@ export function CredentialAcceptDialog({
                             party: partyId,
                             offerId: offer.contractId,
                             factoryId,
+                            version: offer.version,
                             disclosure: validDisclosure,
                         })
                     }}

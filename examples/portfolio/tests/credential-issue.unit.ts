@@ -2,6 +2,8 @@ import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import { credentialInterfaces } from '../src/config/credential-interfaces'
 import {
+    approvalAvailable,
+    approveRequest,
     claimKeyError,
     claimsTextMap,
     createOffer,
@@ -21,6 +23,8 @@ const FACTORY = '00e0d138cafe'
 
 const request: CredentialRequest = {
     contractId: '00req',
+    version: 'current',
+    requestedIssuer: ISSUER,
     holder: HOLDER,
     requestedType: 'training',
     registryAdmin: ADMIN,
@@ -29,6 +33,10 @@ const request: CredentialRequest = {
 
 const input = {
     request,
+    holder: HOLDER,
+    requestedType: 'training',
+    registryAdmin: ADMIN,
+    anchorers: [ISSUER],
     issuer: ISSUER,
     factory: FACTORY,
     extraTypes: [],
@@ -52,7 +60,7 @@ test('offer create command matches the DemoCredentialOffer fields exactly', () =
     ).CreateCommand
     assert.equal(
         create.templateId,
-        '#canton-network-credentials-demo:Canton.Network.Credentials.Demo:DemoCredentialOffer'
+        '#canton-network-credentials-demo-v2:Canton.Network.Credentials.Demo:DemoCredentialOffer'
     )
     // Every field of the template, in the exact JSON encoding the ledger accepts:
     // NonEmpty as {hd,tl}, Optional as null, variant as {tag,value}, TextMap as an
@@ -100,6 +108,7 @@ test('offer carries optional values, extra types and several anchorers', () => {
     const [command] = createOffer({
         ...input,
         request: { ...request, anchorers: [ISSUER, 'SecondAnchorer::ns'] },
+        anchorers: [ISSUER, 'SecondAnchorer::ns'],
         extraTypes: ['EmployeeCredential', 'training'],
         subjectId: null,
         claims: [],
@@ -142,19 +151,20 @@ test('offer carries optional values, extra types and several anchorers', () => {
 
 test('issuer must be one of the request anchorers, because it signs as an anchorer', () => {
     assert.throws(
-        () => createOffer({ ...input, issuer: 'Outsider::ns' }),
+        () => createOffer({ ...input, request: null, issuer: 'Outsider::ns' }),
         /issuer party must be one of the request anchorers/
     )
     // An anchorer that is not first in the list is still a valid issuer.
     assert.ok(
         createOffer({
             ...input,
-            request: { ...request, anchorers: ['SecondAnchorer::ns', ISSUER] },
+            request: null,
+            anchorers: ['SecondAnchorer::ns', ISSUER],
         })
     )
 })
 
-test('offer rejects a missing issuer, factory, request or anchorer', () => {
+test('offer rejects a missing issuer, factory, holder or anchorer', () => {
     assert.throws(
         () => createOffer({ ...input, issuer: '  ' }),
         /issuer party is required/
@@ -164,13 +174,52 @@ test('offer rejects a missing issuer, factory, request or anchorer', () => {
         /registry factory contract is required/
     )
     assert.throws(
-        () =>
-            createOffer({ ...input, request: { ...request, contractId: '' } }),
-        /existing credential request is required/
+        () => createOffer({ ...input, holder: '' }),
+        /full holder Party ID/
     )
     assert.throws(
-        () => createOffer({ ...input, request: { ...request, anchorers: [] } }),
-        /at least one anchorer/
+        () => createOffer({ ...input, request: null, anchorers: [] }),
+        /At least one anchorer/
+    )
+})
+
+test('unsolicited offer has no request and needs holder acceptance, while approval issues directly', () => {
+    const [offer] = createOffer({ ...input, request: null })
+    assert.equal(offer.CreateCommand?.createArguments?.request, null)
+    assert.equal(approvalAvailable(request, ISSUER), true)
+    assert.equal(approvalAvailable(request, ADMIN), false)
+    assert.equal(
+        approvalAvailable(
+            { ...request, version: 'legacy', requestedIssuer: null },
+            ISSUER
+        ),
+        false
+    )
+    assert.equal(
+        approvalAvailable({ ...request, anchorers: [ISSUER, ADMIN] }, ISSUER),
+        false
+    )
+    const [command, disclosures] = approveRequest(input)
+    const args = createOffer(input)[0].CreateCommand?.createArguments as Record<
+        string,
+        unknown
+    >
+    assert.deepEqual(command, {
+        ExerciseCommand: {
+            templateId: credentialInterfaces.request,
+            contractId: request.contractId,
+            choice: 'CredentialRequest_Approve',
+            choiceArgument: {
+                credential: args.credential,
+                registration: args.registration,
+                factory: FACTORY,
+            },
+        },
+    })
+    assert.deepEqual(disclosures, [])
+    assert.throws(
+        () => approveRequest({ ...input, issuer: ADMIN }),
+        /Only the requested issuer/
     )
 })
 
@@ -229,26 +278,23 @@ test('credential types always start with VerifiableCredential and stay unique', 
 
 test('required signatories are the anchorers, the issuer and the registry admin, deduped', () => {
     // The issuer is already an anchorer, so it appears once.
-    assert.deepEqual(requiredOfferSignatories(request, ISSUER), [ISSUER, ADMIN])
+    assert.deepEqual(requiredOfferSignatories(input), [ISSUER, ADMIN])
     assert.deepEqual(
-        requiredOfferSignatories(
-            { ...request, anchorers: [ISSUER, 'SecondAnchorer::ns'] },
-            ISSUER
-        ),
+        requiredOfferSignatories({
+            ...input,
+            anchorers: [ISSUER, 'SecondAnchorer::ns'],
+        }),
         [ISSUER, 'SecondAnchorer::ns', ADMIN]
     )
     // An admin that also anchors is not listed twice.
     assert.deepEqual(
-        requiredOfferSignatories(
-            { ...request, anchorers: [ISSUER, ADMIN] },
-            ISSUER
-        ),
+        requiredOfferSignatories({ ...input, anchorers: [ISSUER, ADMIN] }),
         [ISSUER, ADMIN]
     )
 })
 
 test('controlled-party check names exactly the signatories the wallet user lacks', () => {
-    const required = requiredOfferSignatories(request, ISSUER)
+    const required = requiredOfferSignatories(input)
     assert.deepEqual(
         missingOfferSignatories(required, [ISSUER, ADMIN, HOLDER]),
         []
@@ -279,26 +325,22 @@ test('requests split by role: own requests versus requests this party can answer
     })
     const snapshot = decodeCredentials(
         [
-            event(
-                'own',
-                credentialInterfaces.request,
-                requestView(ISSUER, [ISSUER])
-            ),
-            event(
-                'asAnchorer',
-                credentialInterfaces.request,
-                requestView(HOLDER, [ISSUER])
-            ),
-            event(
-                'asAdmin',
-                credentialInterfaces.request,
-                requestView(HOLDER, ['Other::ns'], ISSUER)
-            ),
-            event(
-                'unrelated',
-                credentialInterfaces.request,
-                requestView(HOLDER, ['Other::ns'])
-            ),
+            event('own', credentialInterfaces.request, {
+                ...requestView(ISSUER, [ISSUER]),
+                requestedIssuer: ISSUER,
+            }),
+            event('asAnchorer', credentialInterfaces.request, {
+                ...requestView(HOLDER, [ISSUER]),
+                requestedIssuer: ISSUER,
+            }),
+            event('asAdmin', credentialInterfaces.request, {
+                ...requestView(HOLDER, ['Other::ns'], ISSUER),
+                requestedIssuer: 'Other::ns',
+            }),
+            event('unrelated', credentialInterfaces.request, {
+                ...requestView(HOLDER, ['Other::ns']),
+                requestedIssuer: 'Other::ns',
+            }),
         ],
         ISSUER
     )
@@ -330,6 +372,7 @@ test('registry factories decode with their admin and anchorers', () => {
     assert.deepEqual(snapshot.factories, [
         {
             contractId: 'f1',
+            version: 'current',
             registryAdmin: ADMIN,
             anchorers: [ISSUER, 'SecondAnchorer::ns'],
         },

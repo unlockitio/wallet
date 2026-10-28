@@ -1,6 +1,11 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { credentialInterfaces } from '../src/config/credential-interfaces'
+import {
+    credentialInterfaces,
+    credentialInterfacePackageId,
+    legacyCredentialInterfaces,
+    legacyCredentialInterfacePackageId,
+} from '../src/config/credential-interfaces'
 import {
     decodeCredentials,
     optional,
@@ -202,6 +207,7 @@ test('malformed schema entries are dropped rather than rendered as partial rows'
 test('own requests only and visible offers independent of holder', () => {
     const request = {
         holder: 'other',
+        requestedIssuer: 'anchor',
         requestedType: 'Employee',
         registryAdmin: 'admin',
         anchorers: { hd: 'anchor', tl: [] },
@@ -265,21 +271,22 @@ test('accept and reject use interface choices with only accept disclosing the fa
     ])
 })
 
-test('type-only request has exactly four permitted payload fields, and cancel uses interface choice', () => {
-    const command = createRequest('holder', 'Employee', 'admin', [
-        'anchor-1',
+test('type-only issuer-targeted request has exactly five permitted payload fields, and cancel uses interface choice', () => {
+    const command = createRequest('holder', 'issuer::ns', 'Employee', 'admin', [
+        'issuer::ns',
         'anchor-2',
     ])
     assert.deepEqual(command, [
         {
             CreateCommand: {
                 templateId:
-                    '#canton-network-credentials-demo:Canton.Network.Credentials.Demo:DemoCredentialRequest',
+                    '#canton-network-credentials-demo-v2:Canton.Network.Credentials.Demo:DemoCredentialRequest',
                 createArguments: {
                     holder: 'holder',
+                    requestedIssuer: 'issuer::ns',
                     requestedType: 'Employee',
                     registryAdmin: 'admin',
-                    anchorers: { hd: 'anchor-1', tl: ['anchor-2'] },
+                    anchorers: { hd: 'issuer::ns', tl: ['anchor-2'] },
                 },
             },
         },
@@ -287,7 +294,25 @@ test('type-only request has exactly four permitted payload fields, and cancel us
     ])
     assert.deepEqual(
         Object.keys(command[0].CreateCommand?.createArguments ?? {}).sort(),
-        ['anchorers', 'holder', 'registryAdmin', 'requestedType']
+        [
+            'anchorers',
+            'holder',
+            'registryAdmin',
+            'requestedIssuer',
+            'requestedType',
+        ]
+    )
+    assert.throws(
+        () =>
+            createRequest('holder', 'issuer', 'Employee', 'admin', ['issuer']),
+        /full Canton Party ID/
+    )
+    assert.throws(
+        () =>
+            createRequest('holder', 'issuer::ns', 'Employee', 'admin', [
+                'other::ns',
+            ]),
+        /one of the anchorers/
     )
     assert.deepEqual(cancelRequest('request-1'), [
         {
@@ -304,8 +329,7 @@ test('type-only request has exactly four permitted payload fields, and cancel us
 
 // The ledger reports interface views under the resolved package ID even when the ACS
 // filter used the `#package-name` reference, as captured from a LocalNet ACS response.
-const resolvedPackageId =
-    '8e2be0a6512d780aeeeffa7fe791737de737256e944466301336d28544e8e0fc'
+const resolvedPackageId = legacyCredentialInterfacePackageId
 const resolved = (entity: string) =>
     `${resolvedPackageId}:Canton.Network.Credentials.V1:${entity}`
 
@@ -420,6 +444,167 @@ test('package-ID interface views decode identically to package-name views', () =
         ['of1']
     )
     assert.equal(snapshot.offers[0].requestedType, 'membership')
+    assert.equal(snapshot.requests[0].version, 'legacy')
+    assert.equal(snapshot.requests[0].requestedIssuer, null)
+})
+
+test('current and old requests coexist with honest package versions', () => {
+    const oldView = {
+        holder: 'holder::ns',
+        requestedType: 'Training',
+        registryAdmin: 'admin::ns',
+        anchorers: { hd: 'issuer::ns', tl: [] },
+    }
+    const snapshot = decodeCredentials(
+        [
+            event('old', resolved('CredentialRequest'), oldView),
+            event(
+                'new',
+                `${credentialInterfacePackageId}:Canton.Network.Credentials.V1:CredentialRequest`,
+                { ...oldView, requestedIssuer: 'issuer::ns' }
+            ),
+        ],
+        'holder::ns'
+    )
+    assert.deepEqual(
+        snapshot.requests.map(({ contractId, version, requestedIssuer }) => ({
+            contractId,
+            version,
+            requestedIssuer,
+        })),
+        [
+            { contractId: 'old', version: 'legacy', requestedIssuer: null },
+            {
+                contractId: 'new',
+                version: 'current',
+                requestedIssuer: 'issuer::ns',
+            },
+        ]
+    )
+})
+
+test('registration joins within its package generation, never across equal contract IDs', () => {
+    const snapshot = decodeCredentials(
+        [
+            event('same', legacyCredentialInterfaces.credential, credential),
+            event('same', credentialInterfaces.credential, {
+                ...credential,
+                id: 'new',
+            }),
+            event('same', legacyCredentialInterfaces.registered, {
+                registryAdmin: 'old-admin',
+                registeredAt: '2026-01-01T00:00:00Z',
+            }),
+        ],
+        'holder'
+    )
+    assert.equal(snapshot.credentials.length, 2)
+    assert.equal(
+        snapshot.credentials.find(({ id }) => id === 'new')?.registration,
+        null
+    )
+    assert.equal(
+        snapshot.credentials.find(({ id }) => id === null)?.registration
+            ?.registryAdmin,
+        'old-admin'
+    )
+})
+
+test('old seeded contract views coexist with v2 and retain old action targets', () => {
+    const oldRequest = {
+        holder: 'holder::ns',
+        requestedType: 'membership',
+        registryAdmin: 'admin::ns',
+        anchorers: { hd: 'issuer::ns', tl: [] },
+    }
+    const views = Array.from({ length: 370 }, (_, index) =>
+        event(`old-${index}`, resolved('CredentialRequest'), oldRequest)
+    )
+    const snapshot = decodeCredentials(
+        [
+            ...views,
+            event('new-request', credentialInterfaces.request, {
+                ...oldRequest,
+                requestedIssuer: 'issuer::ns',
+            }),
+            event('old-offer', legacyCredentialInterfaces.offer, {
+                ...oldRequest,
+                request: 'old-0',
+                factory: 'old-factory',
+            }),
+            event('new-offer', credentialInterfaces.offer, {
+                ...oldRequest,
+                request: null,
+                factory: 'new-factory',
+            }),
+            event('bad-old-offer', legacyCredentialInterfaces.offer, {
+                ...oldRequest,
+                request: null,
+            }),
+        ],
+        'holder::ns'
+    )
+    assert.equal(snapshot.requests.length, 371)
+    assert.equal(
+        snapshot.requests.filter(({ version }) => version === 'legacy').length,
+        370
+    )
+    assert.deepEqual(
+        snapshot.offers.map(({ contractId, version, request }) => ({
+            contractId,
+            version,
+            request,
+        })),
+        [
+            { contractId: 'old-offer', version: 'legacy', request: 'old-0' },
+            { contractId: 'new-offer', version: 'current', request: null },
+        ]
+    )
+    assert.equal(
+        acceptOffer('old-offer', disclosure, 'legacy')[0].ExerciseCommand
+            ?.templateId,
+        legacyCredentialInterfaces.offer
+    )
+    assert.equal(
+        rejectOffer('old-offer', 'legacy')[0].ExerciseCommand?.templateId,
+        legacyCredentialInterfaces.offer
+    )
+    assert.equal(
+        cancelRequest('old-0', 'legacy')[0].ExerciseCommand?.templateId,
+        legacyCredentialInterfaces.request
+    )
+})
+
+test('unknown lineage and wrong request shapes cannot masquerade as v2', () => {
+    const old = {
+        holder: 'holder',
+        requestedType: 'membership',
+        registryAdmin: 'admin',
+        anchorers: { hd: 'issuer', tl: [] },
+    }
+    const snapshot = decodeCredentials(
+        [
+            event(
+                'unknown',
+                'deadbeef:Canton.Network.Credentials.V1:CredentialRequest',
+                { ...old, requestedIssuer: 'issuer' }
+            ),
+            event('wrong-v2', credentialInterfaces.request, old),
+            event('old', legacyCredentialInterfaces.request, {
+                ...old,
+                requestedIssuer: 'issuer',
+            }),
+        ],
+        'holder'
+    )
+    assert.deepEqual(
+        snapshot.requests.map(({ contractId, version, requestedIssuer }) => ({
+            contractId,
+            version,
+            requestedIssuer,
+        })),
+        [{ contractId: 'old', version: 'legacy', requestedIssuer: null }]
+    )
 })
 
 test('interface views from an unrelated package with the same entity name are ignored', () => {

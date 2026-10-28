@@ -1,4 +1,9 @@
-import { credentialInterfaces } from '../config/credential-interfaces'
+import {
+    credentialInterfaces,
+    credentialInterfacePackageId,
+    legacyCredentialInterfacePackageId,
+    legacyCredentialInterfaces,
+} from '../config/credential-interfaces'
 import { interfaceKindOf, interfaceKinds } from './interface-id'
 
 export type Identifier = { tag: string; value: string }
@@ -38,18 +43,21 @@ export type Registration = {
 }
 export type CredentialRequest = {
     contractId: string
+    version: 'current' | 'legacy'
+    requestedIssuer: string | null
     holder: string
     requestedType: string
     registryAdmin: string
     anchorers: string[]
 }
-export type CredentialOffer = CredentialRequest & {
+export type CredentialOffer = Omit<CredentialRequest, 'requestedIssuer'> & {
     request: unknown
     factory: unknown
     credential: unknown
     registration: unknown
 }
 export type RegistryFactory = {
+    version: 'current' | 'legacy'
     contractId: string
     registryAdmin: string
     anchorers: string[]
@@ -188,7 +196,7 @@ const decodeRegistration = (value: unknown): Registration | null => {
 const decodeFactory = (
     contractId: string,
     value: unknown
-): RegistryFactory | null => {
+): Omit<RegistryFactory, 'version'> | null => {
     const view = record(value)
     const registryAdmin = text(view?.registryAdmin)
     const anchorers = partyList(view?.anchorers)
@@ -198,15 +206,22 @@ const decodeFactory = (
 }
 const decodeRequest = (
     contractId: string,
-    value: unknown
+    value: unknown,
+    version: 'current' | 'legacy'
 ): CredentialRequest | null => {
     const view = record(value)
     const holder = text(view?.holder)
     const requestedType = text(view?.requestedType)
     const registryAdmin = text(view?.registryAdmin)
-    return holder && requestedType && registryAdmin
+    const requestedIssuer = text(view?.requestedIssuer)
+    return holder &&
+        requestedType &&
+        registryAdmin &&
+        (version === 'legacy' || requestedIssuer)
         ? {
               contractId,
+              version,
+              requestedIssuer: version === 'current' ? requestedIssuer : null,
               holder,
               requestedType,
               registryAdmin,
@@ -216,6 +231,7 @@ const decodeRequest = (
 }
 
 const credentialInterfaceKinds = interfaceKinds(credentialInterfaces)
+const legacyInterfaceKinds = interfaceKinds(legacyCredentialInterfaces)
 
 export const decodeCredentials = (
     events: unknown[],
@@ -233,39 +249,59 @@ export const decodeCredentials = (
         if (!contractId || !Array.isArray(contract?.interfaceViews)) continue
         for (const rawView of contract.interfaceViews) {
             const interfaceView = record(rawView)
+            const packageId = text(interfaceView?.interfaceId)?.split(':')[0]
+            const version =
+                packageId === credentialInterfacePackageId ||
+                packageId === '#canton-network-credentials-interfaces-v2'
+                    ? 'current'
+                    : packageId === legacyCredentialInterfacePackageId
+                      ? 'legacy'
+                      : null
+            if (!version) continue
             const kind = interfaceKindOf(
-                credentialInterfaceKinds,
+                version === 'current'
+                    ? credentialInterfaceKinds
+                    : legacyInterfaceKinds,
                 interfaceView?.interfaceId
             )
             const value = interfaceView?.viewValue
+            const generationKey = `${version}:${contractId}`
             if (kind === 'credential') {
                 const credential = decodeCredential(contractId, value)
-                if (credential) credentials.set(contractId, credential)
+                if (credential) credentials.set(generationKey, credential)
             } else if (kind === 'registered') {
                 const registration = decodeRegistration(value)
-                if (registration) registrations.set(contractId, registration)
+                if (registration) registrations.set(generationKey, registration)
             } else if (kind === 'request') {
-                const request = decodeRequest(contractId, value)
+                const request = decodeRequest(contractId, value, version)
                 if (!request) continue
                 if (request.holder === partyId)
-                    requests.set(contractId, request)
+                    requests.set(generationKey, request)
                 // The request template makes the registry admin and the anchorers
                 // observers, so a routing party sees requests it did not make.
                 else if (
                     request.registryAdmin === partyId ||
                     request.anchorers.includes(partyId)
                 ) {
-                    incomingRequests.set(contractId, request)
+                    incomingRequests.set(generationKey, request)
                 }
             } else if (kind === 'factory') {
                 const factory = decodeFactory(contractId, value)
-                if (factory) factories.set(contractId, factory)
+                if (factory)
+                    factories.set(generationKey, { ...factory, version })
             } else if (kind === 'offer') {
                 const view = record(value)
-                const offer = decodeRequest(contractId, value)
-                if (offer)
-                    offers.set(contractId, {
+                const offer = decodeRequest(contractId, value, 'legacy')
+                if (
+                    offer &&
+                    (version === 'current'
+                        ? view?.request === null ||
+                          typeof view?.request === 'string'
+                        : typeof view?.request === 'string')
+                )
+                    offers.set(generationKey, {
                         ...offer,
+                        version,
                         request: view?.request,
                         factory: view?.factory,
                         credential: view?.credential,
@@ -275,9 +311,9 @@ export const decodeCredentials = (
         }
     }
     return {
-        credentials: [...credentials.values()].map((credential) => ({
+        credentials: [...credentials].map(([key, credential]) => ({
             ...credential,
-            registration: registrations.get(credential.contractId) ?? null,
+            registration: registrations.get(key) ?? null,
         })),
         offers: [...offers.values()],
         requests: [...requests.values()],

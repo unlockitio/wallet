@@ -1,5 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { credentialInterfaceIds } from '../config/credential-interfaces'
+import {
+    credentialInterfaceIds,
+    legacyCredentialInterfaceIds,
+} from '../config/credential-interfaces'
 import {
     decodeCredentials,
     type CredentialsSnapshot,
@@ -30,16 +33,35 @@ export function useCredentials() {
             if (!sdk || !partyId)
                 throw new Error('Wallet SDK and primary party are required')
             try {
-                const events =
-                    await sdk.ledger.acsReader.paginated.raw.readJsContracts({
+                const read = (interfaceIds: string[]) =>
+                    sdk.ledger.acsReader.paginated.raw.readJsContracts({
                         parties: [partyId],
                         filterByParty: true,
-                        interfaceIds: credentialInterfaceIds,
+                        interfaceIds,
                         continueUntilCompletion: true,
                     })
+                const readIfAvailable = async (ids: string[]) => {
+                    try {
+                        return { events: await read(ids), missing: false }
+                    } catch (cause) {
+                        if (
+                            /PACKAGE_NOT_FOUND|PACKAGE_NAME_NOT_FOUND|unknown package name|package.*not.*found/i.test(
+                                String(cause)
+                            )
+                        )
+                            return { events: [], missing: true }
+                        throw cause
+                    }
+                }
+                // Both reads are independent: LocalNet may only have the old DAR.
+                const [current, legacy] = await Promise.all([
+                    readIfAvailable(credentialInterfaceIds),
+                    readIfAvailable(legacyCredentialInterfaceIds),
+                ])
+                const events = [...current.events, ...legacy.events]
                 return {
                     ...decodeCredentials(events, partyId),
-                    packageMissing: false,
+                    packageMissing: current.missing && legacy.missing,
                 }
             } catch (error) {
                 const message =

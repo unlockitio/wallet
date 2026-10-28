@@ -1,5 +1,5 @@
 const packageName =
-    '#canton-network-credentials-interfaces:Canton.Network.Credentials.V1:'
+    '#canton-network-credentials-interfaces-v2:Canton.Network.Credentials.V1:'
 
 export const credentialInterfaces = {
     credential: `${packageName}Credential`,
@@ -9,10 +9,29 @@ export const credentialInterfaces = {
     factory: `${packageName}CredentialRegistryFactory`,
 } as const
 
+export const credentialInterfacePackageId =
+    '68824ddd934993972c34c3d7a1e496edd03867210e4b003bbe6e75636c497f8d'
+export const legacyCredentialInterfacePackageId =
+    '8e2be0a6512d780aeeeffa7fe791737de737256e944466301336d28544e8e0fc'
+
+// Query the published interface and the deployed legacy interface separately. A
+// package-name reference resolves to the latest version, not both versions.
 export const credentialInterfaceIds = Object.values(credentialInterfaces)
+export const legacyCredentialInterfaces = Object.fromEntries(
+    Object.entries(credentialInterfaces).map(([kind, id]) => [
+        kind,
+        id.replace(
+            '#canton-network-credentials-interfaces-v2',
+            legacyCredentialInterfacePackageId
+        ),
+    ])
+) as { [K in keyof typeof credentialInterfaces]: string }
+export const legacyCredentialInterfaceIds = Object.values(
+    legacyCredentialInterfaces
+)
 
 const demoPackage =
-    '#canton-network-credentials-demo:Canton.Network.Credentials.Demo:'
+    '#canton-network-credentials-demo-v2:Canton.Network.Credentials.Demo:'
 export const demoCredentialRequestId = `${demoPackage}DemoCredentialRequest`
 export const demoCredentialOfferId = `${demoPackage}DemoCredentialOffer`
 

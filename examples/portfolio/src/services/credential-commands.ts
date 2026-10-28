@@ -1,6 +1,7 @@
 import type { PreparedCommand } from '@canton-network/wallet-sdk'
 import {
     credentialInterfaces,
+    legacyCredentialInterfaces,
     demoCredentialOfferId,
     demoCredentialRequestId,
 } from '../config/credential-interfaces'
@@ -78,12 +79,16 @@ export function validateFactoryDisclosure(
 
 export function acceptOffer(
     contractId: string,
-    disclosure: FactoryDisclosure
+    disclosure: FactoryDisclosure,
+    version: 'current' | 'legacy' = 'current'
 ): PreparedCommand {
     return [
         {
             ExerciseCommand: {
-                templateId: credentialInterfaces.offer,
+                templateId:
+                    version === 'current'
+                        ? credentialInterfaces.offer
+                        : legacyCredentialInterfaces.offer,
                 contractId,
                 choice: 'CredentialOffer_Accept',
                 choiceArgument: {},
@@ -93,11 +98,17 @@ export function acceptOffer(
     ]
 }
 
-export function rejectOffer(contractId: string): PreparedCommand {
+export function rejectOffer(
+    contractId: string,
+    version: 'current' | 'legacy' = 'current'
+): PreparedCommand {
     return [
         {
             ExerciseCommand: {
-                templateId: credentialInterfaces.offer,
+                templateId:
+                    version === 'current'
+                        ? credentialInterfaces.offer
+                        : legacyCredentialInterfaces.offer,
                 contractId,
                 choice: 'CredentialOffer_Reject',
                 choiceArgument: {},
@@ -107,11 +118,17 @@ export function rejectOffer(contractId: string): PreparedCommand {
     ]
 }
 
-export function cancelRequest(contractId: string): PreparedCommand {
+export function cancelRequest(
+    contractId: string,
+    version: 'current' | 'legacy' = 'current'
+): PreparedCommand {
     return [
         {
             ExerciseCommand: {
-                templateId: credentialInterfaces.request,
+                templateId:
+                    version === 'current'
+                        ? credentialInterfaces.request
+                        : legacyCredentialInterfaces.request,
                 contractId,
                 choice: 'CredentialRequest_Cancel',
                 choiceArgument: {},
@@ -123,21 +140,27 @@ export function cancelRequest(contractId: string): PreparedCommand {
 
 export function createRequest(
     holder: string,
+    requestedIssuer: string,
     requestedType: string,
     registryAdmin: string,
     anchorers: string[]
 ): PreparedCommand {
     if (
         !holder ||
+        !requestedIssuer.trim() ||
         !requestedType.trim() ||
         !registryAdmin.trim() ||
         !anchorers.length ||
         anchorers.some((party) => !party.trim())
     ) {
         throw new Error(
-            'Holder, credential type, registry admin and at least one anchorer are required'
+            'Holder, issuer, credential type, registry admin and at least one anchorer are required'
         )
     }
+    if (!/^.+::.+$/.test(requestedIssuer.trim()))
+        throw new Error('Requested issuer must be a full Canton Party ID')
+    if (!anchorers.includes(requestedIssuer.trim()))
+        throw new Error('Requested issuer must be one of the anchorers')
     if (new Set(anchorers).size !== anchorers.length)
         throw new Error('Anchorers must be unique')
     return [
@@ -146,6 +169,7 @@ export function createRequest(
                 templateId: demoCredentialRequestId,
                 createArguments: {
                     holder,
+                    requestedIssuer: requestedIssuer.trim(),
                     requestedType: requestedType.trim(),
                     registryAdmin: registryAdmin.trim(),
                     anchorers: { hd: anchorers[0], tl: anchorers.slice(1) },
@@ -170,9 +194,11 @@ export type SubjectIdentifierInput = {
 export type ClaimInput = { key: string; value: string }
 
 export type IssueOfferInput = {
-    request: CredentialRequest
-    // The issuer is a Canton Party, so the offer is signed, and the template requires
-    // it to be one of the request's anchorers.
+    request: CredentialRequest | null
+    holder: string
+    requestedType: string
+    registryAdmin: string
+    anchorers: string[]
     issuer: string
     factory: string
     // Types beyond `VerifiableCredential` and the requested type.
@@ -190,10 +216,27 @@ export type IssueOfferInput = {
 // The signatories the `DemoCredentialOffer` template demands, in template order and
 // without duplicates: the request anchorers, the Party issuer, the registry admin.
 export function requiredOfferSignatories(
+    routing: Pick<IssueOfferInput, 'anchorers' | 'registryAdmin' | 'issuer'>
+): string[] {
+    return [
+        ...new Set([
+            ...routing.anchorers,
+            routing.issuer,
+            routing.registryAdmin,
+        ]),
+    ]
+}
+
+export function approvalAvailable(
     request: CredentialRequest,
     issuer: string
-): string[] {
-    return [...new Set([...request.anchorers, issuer, request.registryAdmin])]
+): boolean {
+    return (
+        request.version === 'current' &&
+        request.requestedIssuer === issuer &&
+        request.anchorers.length === 1 &&
+        request.anchorers[0] === issuer
+    )
 }
 
 export const missingOfferSignatories = (
@@ -239,37 +282,82 @@ export function claimsTextMap(
     return map
 }
 
+export function approveRequest(input: IssueOfferInput): PreparedCommand {
+    const request = input.request
+    if (!request || !approvalAvailable(request, input.issuer))
+        throw new Error(
+            'Only the requested issuer can approve a current issuer-only request'
+        )
+    const [offer] = createOffer(input)
+    if (!('CreateCommand' in offer))
+        throw new Error('Credential payload unavailable')
+    const args = offer.CreateCommand.createArguments as Record<string, unknown>
+    return [
+        {
+            ExerciseCommand: {
+                templateId: credentialInterfaces.request,
+                contractId: request.contractId,
+                choice: 'CredentialRequest_Approve',
+                choiceArgument: {
+                    credential: args.credential,
+                    registration: args.registration,
+                    factory: args.factory,
+                },
+            },
+        },
+        [],
+    ]
+}
+
 export function createOffer(input: IssueOfferInput): PreparedCommand {
-    const { request, issuer, factory } = input
+    const {
+        request,
+        issuer,
+        factory,
+        holder,
+        requestedType,
+        registryAdmin,
+        anchorers: parties,
+    } = input
     if (!issuer.trim()) throw new Error('An issuer party is required')
     if (!factory.trim())
         throw new Error('A credential registry factory contract is required')
-    if (!request.contractId)
-        throw new Error('An existing credential request is required')
-    if (!request.anchorers.length)
-        throw new Error('The request must name at least one anchorer')
-    if (!request.anchorers.includes(issuer)) {
+    if (!holder.trim() || !/^.+::.+$/.test(holder.trim()))
+        throw new Error('A full holder Party ID is required')
+    if (!requestedType.trim() || !registryAdmin.trim())
+        throw new Error('Credential type and registry admin are required')
+    if (!parties.length) throw new Error('At least one anchorer is required')
+    if (
+        request &&
+        (request.version !== 'current' ||
+            request.requestedIssuer !== issuer ||
+            request.holder !== holder ||
+            request.requestedType !== requestedType ||
+            request.registryAdmin !== registryAdmin ||
+            JSON.stringify(request.anchorers) !== JSON.stringify(parties))
+    )
+        throw new Error(
+            'Request-backed offer must match a current issuer-targeted request'
+        )
+    if (!parties.includes(issuer)) {
         throw new Error(
             'The issuer party must be one of the request anchorers, because the offer is signed by the issuer as an anchorer'
         )
     }
-    const credentialTypes = credentialTypesFor(
-        request.requestedType,
-        input.extraTypes
-    )
+    const credentialTypes = credentialTypesFor(requestedType, input.extraTypes)
     const anchorers = {
-        hd: request.anchorers[0],
-        tl: request.anchorers.slice(1),
+        hd: parties[0],
+        tl: parties.slice(1),
     }
     return [
         {
             CreateCommand: {
                 templateId: demoCredentialOfferId,
                 createArguments: {
-                    request: request.contractId,
-                    holder: request.holder,
-                    requestedType: request.requestedType,
-                    registryAdmin: request.registryAdmin,
+                    request: request?.contractId ?? null,
+                    holder,
+                    requestedType,
+                    registryAdmin,
                     anchorers,
                     factory: factory.trim(),
                     credential: {
@@ -297,11 +385,11 @@ export function createOffer(input: IssueOfferInput): PreparedCommand {
                         },
                         credentialSchema: [],
                         securing: null,
-                        holders: [request.holder],
+                        holders: [holder],
                         anchorers,
                     },
                     registration: {
-                        registryAdmin: request.registryAdmin,
+                        registryAdmin,
                         registeredAt: input.registeredAt,
                         expiresAt: input.registrationExpiresAt,
                         meta: {},
