@@ -4,16 +4,20 @@
 import { Tab, Tabs } from '@mui/material'
 import type { OfferCategory } from '@hooks/useOffers'
 
+// Credential offers are not token-standard offers, so they are a page tab rather than
+// an `OfferCategory`, which stays limited to the categories `OffersContent` renders.
+export type OfferTabValue = OfferCategory | 'credentials'
+
 interface OfferTabsProps {
-    value: OfferCategory
-    onChange: (value: OfferCategory) => void
+    value: OfferTabValue
+    onChange: (value: OfferTabValue) => void
 }
 
 export function OfferTabs({ value, onChange }: OfferTabsProps) {
     return (
         <Tabs
             value={value}
-            onChange={(_, nextValue: OfferCategory) => onChange(nextValue)}
+            onChange={(_, nextValue: OfferTabValue) => onChange(nextValue)}
             aria-label="Offer category"
             textColor="inherit"
             slotProps={{
@@ -46,6 +50,7 @@ export function OfferTabs({ value, onChange }: OfferTabsProps) {
         >
             <Tab disableRipple value="transfers" label="Transfers" />
             <Tab disableRipple value="allocations" label="Allocations" />
+            <Tab disableRipple value="credentials" label="Credential offers" />
         </Tabs>
     )
 }

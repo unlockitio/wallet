@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from 'react'
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet'
+import BadgeOutlinedIcon from '@mui/icons-material/BadgeOutlined'
 import DashboardIcon from '@mui/icons-material/Dashboard'
 import HelpOutlineOutlinedIcon from '@mui/icons-material/HelpOutlineOutlined'
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone'
@@ -28,6 +29,7 @@ import { CountBadge } from '@components/ui/count-badge'
 import { PillButton } from '@components/ui/PillButton'
 import { useConnection } from '@contexts/ConnectionContext'
 import { useAccounts } from '@hooks/useAccounts'
+import { useCredentials } from '@hooks/useCredentials'
 import { useOffers } from '@hooks/useOffers'
 
 const SIDEBAR_WIDTH = (theme: Theme) =>
@@ -43,13 +45,24 @@ function RouteComponent() {
     const pathname = useLocation({ select: (location) => location.pathname })
     const matchRoute = useMatchRoute()
     const offers = useOffers()
+    const credentials = useCredentials()
     const activeOfferCount = useMemo(
         () =>
-            offers.isLoading || offers.isError
+            (offers.isLoading || offers.isError
                 ? 0
                 : offers.all.filter((offer) => offer.status !== 'Expired')
-                      .length,
-        [offers.all, offers.isLoading, offers.isError]
+                      .length) +
+            (credentials.isLoading || credentials.error
+                ? 0
+                : credentials.data.offers.length),
+        [
+            offers.all,
+            offers.isLoading,
+            offers.isError,
+            credentials.data.offers,
+            credentials.isLoading,
+            credentials.error,
+        ]
     )
     const wallets = useMemo(
         () =>
@@ -126,6 +139,13 @@ function RouteComponent() {
                             icon={<DashboardIcon fontSize="small" />}
                         >
                             Dashboard
+                        </SidebarLink>
+                        <SidebarLink
+                            to="/dashboard/credentials"
+                            active={pathname === '/dashboard/credentials'}
+                            icon={<BadgeOutlinedIcon fontSize="small" />}
+                        >
+                            Credentials
                         </SidebarLink>
                         <SidebarLink
                             to="/dashboard/offers"

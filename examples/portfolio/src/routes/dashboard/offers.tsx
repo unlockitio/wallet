@@ -2,10 +2,11 @@ import { useMemo, useState } from 'react'
 import { Box, Typography } from '@mui/material'
 import { createFileRoute } from '@tanstack/react-router'
 import { ActionRequiredDialog } from '@components/dashboard/action-required-dialog'
+import { CredentialOffersContent } from '@components/offers/credential-offers-content'
 import { OffersContent } from '@components/offers/offers-content'
-import { OfferTabs } from '@components/offers/offer-tabs'
+import { OfferTabs, type OfferTabValue } from '@components/offers/offer-tabs'
 import { OfferToolbar } from '@components/offers/offer-toolbar'
-import { useOffers, type OfferCategory } from '@hooks/useOffers'
+import { useOffers } from '@hooks/useOffers'
 
 export const Route = createFileRoute('/dashboard/offers')({
     component: RouteComponent,
@@ -13,25 +14,19 @@ export const Route = createFileRoute('/dashboard/offers')({
 
 function RouteComponent() {
     const offers = useOffers()
-    const [selectedCategory, setSelectedCategory] =
-        useState<OfferCategory>('transfers')
+    const [selectedTab, setSelectedTab] = useState<OfferTabValue>('transfers')
     const [showExpiredOffers, setShowExpiredOffers] = useState(false)
     const [selectedOfferId, setSelectedOfferId] = useState<string | null>(null)
     const visibleOffers = useMemo(() => {
         const categoryOffers =
-            selectedCategory === 'transfers'
-                ? offers.transfers
-                : offers.allocations
+            selectedTab === 'allocations'
+                ? offers.allocations
+                : offers.transfers
 
         return showExpiredOffers
             ? categoryOffers
             : categoryOffers.filter((offer) => offer.status !== 'Expired')
-    }, [
-        offers.allocations,
-        offers.transfers,
-        selectedCategory,
-        showExpiredOffers,
-    ])
+    }, [offers.allocations, offers.transfers, selectedTab, showExpiredOffers])
     const selectedOffer = useMemo(
         () =>
             selectedOfferId
@@ -64,27 +59,32 @@ function RouteComponent() {
                     flexDirection: { xs: 'column', md: 'row' },
                 }}
             >
-                <OfferTabs
-                    value={selectedCategory}
-                    onChange={setSelectedCategory}
-                />
-                <OfferToolbar
-                    showExpiredOffers={showExpiredOffers}
-                    onShowExpiredOffersChange={setShowExpiredOffers}
-                />
+                <OfferTabs value={selectedTab} onChange={setSelectedTab} />
+                {selectedTab !== 'credentials' && (
+                    <OfferToolbar
+                        showExpiredOffers={showExpiredOffers}
+                        onShowExpiredOffersChange={setShowExpiredOffers}
+                    />
+                )}
             </Box>
 
-            <Box component="section" aria-label={`${selectedCategory} offers`}>
-                <OffersContent
-                    offers={visibleOffers}
-                    category={selectedCategory}
-                    isLoading={offers.isLoading}
-                    isError={offers.isError}
-                    error={offers.error}
-                    hasSearchQuery={false}
-                    onOfferClick={(offer) => setSelectedOfferId(offer.id)}
-                />
-            </Box>
+            {selectedTab === 'credentials' ? (
+                <Box component="section" aria-label="credential offers">
+                    <CredentialOffersContent />
+                </Box>
+            ) : (
+                <Box component="section" aria-label={`${selectedTab} offers`}>
+                    <OffersContent
+                        offers={visibleOffers}
+                        category={selectedTab}
+                        isLoading={offers.isLoading}
+                        isError={offers.isError}
+                        error={offers.error}
+                        hasSearchQuery={false}
+                        onOfferClick={(offer) => setSelectedOfferId(offer.id)}
+                    />
+                </Box>
+            )}
 
             <ActionRequiredDialog
                 item={selectedOffer?.source ?? null}

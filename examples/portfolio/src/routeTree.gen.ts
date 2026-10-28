@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard/index'
+import { Route as DashboardCredentialsRouteImport } from './routes/dashboard/credentials'
 import { Route as DashboardFaqRouteImport } from './routes/dashboard/faq'
 import { Route as DashboardOffersRouteImport } from './routes/dashboard/offers'
 import { Route as DashboardSettingsRouteImport } from './routes/dashboard/settings'
@@ -36,6 +37,11 @@ const DashboardRoute = DashboardRouteImport.update({
 const DashboardIndexRoute = DashboardIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardCredentialsRoute = DashboardCredentialsRouteImport.update({
+  id: '/credentials',
+  path: '/credentials',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardFaqRoute = DashboardFaqRouteImport.update({
@@ -63,6 +69,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/connect': typeof ConnectRoute
   '/dashboard': typeof DashboardRouteWithChildren
+  '/dashboard/credentials': typeof DashboardCredentialsRoute
   '/dashboard/faq': typeof DashboardFaqRoute
   '/dashboard/offers': typeof DashboardOffersRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
@@ -72,6 +79,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/connect': typeof ConnectRoute
+  '/dashboard/credentials': typeof DashboardCredentialsRoute
   '/dashboard/faq': typeof DashboardFaqRoute
   '/dashboard/offers': typeof DashboardOffersRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
@@ -83,6 +91,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/connect': typeof ConnectRoute
   '/dashboard': typeof DashboardRouteWithChildren
+  '/dashboard/credentials': typeof DashboardCredentialsRoute
   '/dashboard/faq': typeof DashboardFaqRoute
   '/dashboard/offers': typeof DashboardOffersRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
@@ -95,6 +104,7 @@ export interface FileRouteTypes {
     | '/'
     | '/connect'
     | '/dashboard'
+    | '/dashboard/credentials'
     | '/dashboard/faq'
     | '/dashboard/offers'
     | '/dashboard/settings'
@@ -104,6 +114,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/connect'
+    | '/dashboard/credentials'
     | '/dashboard/faq'
     | '/dashboard/offers'
     | '/dashboard/settings'
@@ -114,6 +125,7 @@ export interface FileRouteTypes {
     | '/'
     | '/connect'
     | '/dashboard'
+    | '/dashboard/credentials'
     | '/dashboard/faq'
     | '/dashboard/offers'
     | '/dashboard/settings'
@@ -157,6 +169,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardIndexRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/credentials': {
+      id: '/dashboard/credentials'
+      path: '/credentials'
+      fullPath: '/dashboard/credentials'
+      preLoaderRoute: typeof DashboardCredentialsRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/faq': {
       id: '/dashboard/faq'
       path: '/faq'
@@ -189,6 +208,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface DashboardRouteChildren {
+  DashboardCredentialsRoute: typeof DashboardCredentialsRoute
   DashboardFaqRoute: typeof DashboardFaqRoute
   DashboardOffersRoute: typeof DashboardOffersRoute
   DashboardSettingsRoute: typeof DashboardSettingsRoute
@@ -197,6 +217,7 @@ interface DashboardRouteChildren {
 }
 
 const DashboardRouteChildren: DashboardRouteChildren = {
+  DashboardCredentialsRoute: DashboardCredentialsRoute,
   DashboardFaqRoute: DashboardFaqRoute,
   DashboardOffersRoute: DashboardOffersRoute,
   DashboardSettingsRoute: DashboardSettingsRoute,

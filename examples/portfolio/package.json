@@ -7,7 +7,9 @@
         "build": "tsc -b && vite build",
         "e2e": "nx playwright:e2e --ui",
         "preview": "vite preview",
-        "otc-trade": "tsx ./scripts/otc-trade.ts"
+        "otc-trade": "tsx ./scripts/otc-trade.ts",
+        "test": "tsx --test 'tests/*.unit.ts'",
+        "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-include='src/**/*.ts' 'tests/*.unit.ts'"
     },
     "dependencies": {
         "@canton-network/core-acs-reader": "catalog:",
