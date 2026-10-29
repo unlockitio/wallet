@@ -76,7 +76,7 @@ Credential commands use optional Vite build-time variables. All default to empty
 The sidebar **Credentials** entry (directly below Dashboard) opens `/dashboard/credentials`, which has two tabs:
 
 - **Credentials** — credentials visible to the primary party (credential and registration interface views joined by contract ID), and own requests with Cancel.
-- **DIDs** — stakeholder-visible DID documents.
+- **DIDs** — stakeholder-visible DID documents, with a self-asserted demo Create DID flow for the connected primary Party.
 
 Two header buttons sit beside the page title, mirroring the dashboard Transfer button:
 
@@ -92,9 +92,11 @@ New flows target interface package name `canton-network-credentials-interfaces-v
 
 An empty list distinguishes its two causes: the hint about a missing package appears only when the ACS read actually reported the interface package absent, otherwise the message names the primary party the read was filtered by.
 
-### DID read-only manual check
+### DID demo manual check
 
-With the DID interfaces package vetted on the participant, connect a wallet whose primary party is a stakeholder of a DID contract and open the **DIDs** tab under **Credentials**. Check the DID document, controllers, methods, relationships, services and any registered metadata. Switch to a primary party that is not a stakeholder and confirm that contract is absent. Without the DID package, the tab displays an availability message. This is an ACS stakeholder view only: it cannot resolve other parties' DIDs, assert aliases, or create, update or deactivate DID contracts. The V1 document view has no `alsoKnownAs` field, so none is displayed.
+With the DID interfaces and `canton-network-did-demo` v0.1.0 packages uploaded and vetted on a fresh LocalNet, connect a wallet whose primary Party is `Owner::full-id` and open **Credentials → DIDs**. Click **Create DID** and confirm the dialog shows the full owner Party and provisional `did:canton:<full Party ID>` as the sole controller. Explicitly select `VITE_CREDENTIAL_REGISTRY_ADMIN` if configured, or enter a distinct full registry-admin Party ID. This is descriptive observer metadata, not that Party's approval. Acknowledge the self-asserted local demo limitation, submit as the owner, then check the refreshed DIDs list for the new document. Reopen the tab and confirm Create DID is disabled when the same DID is visible. Try an invalid or same-as-owner registry admin and confirm submission is disabled. Missing packages or owner submission permissions must surface as errors or package availability; do not infer a successful creation from an error. Switch to a non-stakeholder primary Party and confirm the contract is absent.
+
+This creates `DemoDidDocument` directly with the primary Party as owner and sole controller, empty verification methods, relationships, services and aliases, and demo registration metadata with unverified integrity and no authoritative finality. It does not obtain registry-admin consent or publish an authoritative registration. The method `did:canton:<full Party ID>` is provisional, not ratified. Duplicate prevention checks only the currently visible active DID documents, not ledger-wide uniqueness. This UI cannot resolve other parties' DIDs publicly, assert aliases, update or deactivate documents. V1 has no `alsoKnownAs`. Live creation is untested until a new LocalNet deployment; do not treat unit tests as live ledger verification.
 
 Alternatively, start all services (Wallet Gateway + example dApps) together from the repository root:
 

@@ -1,8 +1,87 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { decodeDids, didInterfaces } from '../src/services/dids'
+import {
+    createOwnerDid,
+    decodeDids,
+    demoDidDocumentId,
+    didInterfaces,
+    hasVisibleDidForOwner,
+    provisionalDid,
+} from '../src/services/dids'
 
 const did = (value: string) => ({ value })
+const owner = 'Alice::1220abc'
+const admin = 'Admin::1220def'
+
+test('owner-signed demo create binds owner, controller and provisional DID with unverified metadata', () => {
+    const [command, disclosed] = createOwnerDid(
+        owner,
+        admin,
+        [],
+        new Date('2026-10-29T10:00:00.000Z')
+    )
+    assert.deepEqual(disclosed, [])
+    assert.ok('CreateCommand' in command)
+    assert.equal(command.CreateCommand.templateId, demoDidDocumentId)
+    assert.deepEqual(command.CreateCommand.createArguments, {
+        owner,
+        document: {
+            id: { value: `did:canton:${owner}` },
+            controllers: { hd: { value: `did:canton:${owner}` }, tl: [] },
+            verificationMethods: [],
+            verificationRelationships: {
+                authentication: [],
+                assertionMethod: [],
+                capabilityInvocation: [],
+            },
+            services: [],
+        },
+        registration: {
+            registryAdmin: admin,
+            registeredAt: '2026-10-29T10:00:00.000Z',
+            updatedAt: '2026-10-29T10:00:00.000Z',
+            versionId: 'demo-version-1',
+            deactivated: false,
+            deactivatedAt: null,
+            source: 'canton-ledger-pqs-demo',
+            integrityEvidence: 'demo-unverified-integrity-evidence',
+            finalityEvidence: 'demo-no-authoritative-finality',
+            meta: { values: {} },
+        },
+        aliases: [],
+    })
+})
+
+test('duplicate visible owner DID is rejected, without claiming ledger-wide uniqueness', () => {
+    const existing = [{ id: provisionalDid(owner) }] as ReturnType<
+        typeof decodeDids
+    >
+    assert.equal(hasVisibleDidForOwner(existing, owner), true)
+    assert.equal(hasVisibleDidForOwner(existing, admin), false)
+    assert.throws(
+        () => createOwnerDid(owner, admin, existing, new Date()),
+        /already visible/
+    )
+})
+
+test('create rejects invalid owner and unconfirmed or same-party admin', () => {
+    assert.throws(
+        () => createOwnerDid('alice', admin, [], new Date()),
+        /Primary party/
+    )
+    assert.throws(
+        () => createOwnerDid(owner, '', [], new Date()),
+        /Registry admin/
+    )
+    assert.throws(
+        () => createOwnerDid(owner, owner, [], new Date()),
+        /distinct/
+    )
+    assert.throws(
+        () => createOwnerDid(owner, 'admin', [], new Date()),
+        /full Canton Party/
+    )
+})
 const document = {
     id: did('did:example:alice'),
     controllers: { hd: did('did:example:alice'), tl: [did('did:example:bob')] },

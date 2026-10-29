@@ -1,4 +1,72 @@
+import type { PreparedCommand } from '@canton-network/wallet-sdk'
 import { interfaceKindOf, interfaceKinds } from './interface-id'
+
+export const demoDidDocumentId =
+    '#canton-network-did-demo:Canton.Network.Did.Demo:DemoDidDocument'
+
+export const provisionalDid = (owner: string) => `did:canton:${owner}`
+
+export function hasVisibleDidForOwner(documents: DidDocument[], owner: string) {
+    return documents.some((document) => document.id === provisionalDid(owner))
+}
+
+export function createOwnerDid(
+    owner: string,
+    registryAdmin: string,
+    existing: DidDocument[],
+    now: Date
+): PreparedCommand {
+    if (!/^[^\s:]+::[^\s:]+$/.test(owner))
+        throw new Error('Primary party must be a full Canton Party ID')
+    const admin = registryAdmin.trim()
+    if (!/^[^\s:]+::[^\s:]+$/.test(admin) || admin === owner)
+        throw new Error(
+            'Registry admin must be a distinct full Canton Party ID'
+        )
+    if (hasVisibleDidForOwner(existing, owner))
+        throw new Error(
+            'A DID with this ID is already visible to the primary party'
+        )
+    if (Number.isNaN(now.getTime()))
+        throw new Error('Invalid registration time')
+    const id = { value: provisionalDid(owner) }
+    const timestamp = now.toISOString()
+    return [
+        {
+            CreateCommand: {
+                templateId: demoDidDocumentId,
+                createArguments: {
+                    owner,
+                    document: {
+                        id,
+                        controllers: { hd: id, tl: [] },
+                        verificationMethods: [],
+                        verificationRelationships: {
+                            authentication: [],
+                            assertionMethod: [],
+                            capabilityInvocation: [],
+                        },
+                        services: [],
+                    },
+                    registration: {
+                        registryAdmin: admin,
+                        registeredAt: timestamp,
+                        updatedAt: timestamp,
+                        versionId: 'demo-version-1',
+                        deactivated: false,
+                        deactivatedAt: null,
+                        source: 'canton-ledger-pqs-demo',
+                        integrityEvidence: 'demo-unverified-integrity-evidence',
+                        finalityEvidence: 'demo-no-authoritative-finality',
+                        meta: { values: {} },
+                    },
+                    aliases: [],
+                },
+            },
+        },
+        [],
+    ]
+}
 
 export const didInterfaces = {
     document:
