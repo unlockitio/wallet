@@ -1,8 +1,55 @@
 import type { PreparedCommand } from '@canton-network/wallet-sdk'
+import type { FactoryDisclosure } from './credential-commands'
 import { interfaceKindOf, interfaceKinds } from './interface-id'
 
-export const demoDidDocumentId =
-    '#canton-network-did-demo:Canton.Network.Did.Demo:DemoDidDocument'
+export const didFactoryInterfaceId =
+    '#canton-network-did-interfaces:Canton.Network.Did.V1:DidRegistryFactory'
+export const didFactoryTemplateId =
+    'ae817a39ccaf478ef6feb04ca8828c40b2c546d29ba39963090e1b552890c743:Canton.Network.Did.Demo:DemoDidRegistryFactory'
+
+export function validateDidFactoryDisclosure(
+    value: unknown,
+    factoryContractId: string,
+    expectedRegistryAdmin: string
+): FactoryDisclosure {
+    if (!factoryContractId.trim())
+        throw new Error('DID registry factory contract ID is required')
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        throw new Error('DID factory disclosure must be an object')
+    const data = value as Record<string, unknown>
+    if (data.contractId !== factoryContractId.trim())
+        throw new Error('DID factory disclosure contract ID does not match')
+    if (data.templateId !== didFactoryTemplateId)
+        throw new Error(
+            'DID factory disclosure must use the current demo factory package ID'
+        )
+    for (const key of ['createdEventBlob', 'synchronizerId']) {
+        if (typeof data[key] !== 'string' || !data[key].trim())
+            throw new Error(`DID factory disclosure missing ${key}`)
+    }
+    const view = data.factoryView
+    if (view !== undefined) {
+        if (
+            !view ||
+            typeof view !== 'object' ||
+            Array.isArray(view) ||
+            (view as Record<string, unknown>).registryAdmin !==
+                expectedRegistryAdmin
+        )
+            throw new Error('DID factory view registry admin does not match')
+    }
+    if (
+        data.registryAdmin !== undefined &&
+        data.registryAdmin !== expectedRegistryAdmin
+    )
+        throw new Error('DID factory metadata registry admin does not match')
+    return {
+        templateId: data.templateId,
+        contractId: data.contractId as string,
+        createdEventBlob: data.createdEventBlob as string,
+        synchronizerId: data.synchronizerId as string,
+    }
+}
 
 export const provisionalDid = (owner: string) => `did:canton:${owner}`
 
@@ -14,7 +61,8 @@ export function createOwnerDid(
     owner: string,
     registryAdmin: string,
     existing: DidDocument[],
-    now: Date
+    factoryContractId: string,
+    disclosure: unknown
 ): PreparedCommand {
     if (!/^[^\s:]+::[^\s:]+$/.test(owner))
         throw new Error('Primary party must be a full Canton Party ID')
@@ -27,16 +75,21 @@ export function createOwnerDid(
         throw new Error(
             'A DID with this ID is already visible to the primary party'
         )
-    if (Number.isNaN(now.getTime()))
-        throw new Error('Invalid registration time')
+    const factory = validateDidFactoryDisclosure(
+        disclosure,
+        factoryContractId,
+        admin
+    )
     const id = { value: provisionalDid(owner) }
-    const timestamp = now.toISOString()
     return [
         {
-            CreateCommand: {
-                templateId: demoDidDocumentId,
-                createArguments: {
+            ExerciseCommand: {
+                templateId: didFactoryInterfaceId,
+                contractId: factory.contractId,
+                choice: 'DidRegistryFactory_Create',
+                choiceArgument: {
                     owner,
+                    expectedRegistryAdmin: admin,
                     document: {
                         id,
                         controllers: { hd: id, tl: [] },
@@ -48,23 +101,10 @@ export function createOwnerDid(
                         },
                         services: [],
                     },
-                    registration: {
-                        registryAdmin: admin,
-                        registeredAt: timestamp,
-                        updatedAt: timestamp,
-                        versionId: 'demo-version-1',
-                        deactivated: false,
-                        deactivatedAt: null,
-                        source: 'canton-ledger-pqs-demo',
-                        integrityEvidence: 'demo-unverified-integrity-evidence',
-                        finalityEvidence: 'demo-no-authoritative-finality',
-                        meta: { values: {} },
-                    },
-                    aliases: [],
                 },
             },
         },
-        [],
+        [factory],
     ]
 }
 

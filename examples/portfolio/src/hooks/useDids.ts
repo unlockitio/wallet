@@ -43,7 +43,15 @@ export function useDids() {
         },
     })
     const create = useMutation({
-        mutationFn: async (registryAdmin: string) => {
+        mutationFn: async ({
+            registryAdmin,
+            factoryContractId,
+            disclosure,
+        }: {
+            registryAdmin: string
+            factoryContractId: string
+            disclosure: unknown
+        }) => {
             if (!partyId || !query.data || query.data.packageMissing)
                 throw new Error(
                     'Primary party and vetted DID packages are required'
@@ -53,7 +61,8 @@ export function useDids() {
                     partyId,
                     registryAdmin,
                     query.data.documents,
-                    new Date()
+                    factoryContractId,
+                    disclosure
                 ),
                 partyId
             )

@@ -3,53 +3,121 @@ import { test } from 'node:test'
 import {
     createOwnerDid,
     decodeDids,
-    demoDidDocumentId,
+    didFactoryInterfaceId,
+    didFactoryTemplateId,
     didInterfaces,
     hasVisibleDidForOwner,
     provisionalDid,
+    validateDidFactoryDisclosure,
 } from '../src/services/dids'
 
 const did = (value: string) => ({ value })
 const owner = 'Alice::1220abc'
 const admin = 'Admin::1220def'
 
-test('owner-signed demo create binds owner, controller and provisional DID with unverified metadata', () => {
+const factoryId = 'factory-contract-id'
+const disclosure = {
+    templateId: didFactoryTemplateId,
+    contractId: factoryId,
+    createdEventBlob: 'opaque-base64-blob',
+    synchronizerId: 'synchronizer-id',
+}
+
+test('owner-only factory exercise binds owner, controller and provisional DID without direct create', () => {
     const [command, disclosed] = createOwnerDid(
         owner,
         admin,
         [],
-        new Date('2026-10-29T10:00:00.000Z')
+        factoryId,
+        disclosure
     )
-    assert.deepEqual(disclosed, [])
-    assert.ok('CreateCommand' in command)
-    assert.equal(command.CreateCommand.templateId, demoDidDocumentId)
-    assert.deepEqual(command.CreateCommand.createArguments, {
-        owner,
-        document: {
-            id: { value: `did:canton:${owner}` },
-            controllers: { hd: { value: `did:canton:${owner}` }, tl: [] },
-            verificationMethods: [],
-            verificationRelationships: {
-                authentication: [],
-                assertionMethod: [],
-                capabilityInvocation: [],
+    assert.deepEqual(disclosed, [disclosure])
+    assert.deepEqual(command, {
+        ExerciseCommand: {
+            templateId: didFactoryInterfaceId,
+            contractId: factoryId,
+            choice: 'DidRegistryFactory_Create',
+            choiceArgument: {
+                owner,
+                expectedRegistryAdmin: admin,
+                document: {
+                    id: { value: `did:canton:${owner}` },
+                    controllers: {
+                        hd: { value: `did:canton:${owner}` },
+                        tl: [],
+                    },
+                    verificationMethods: [],
+                    verificationRelationships: {
+                        authentication: [],
+                        assertionMethod: [],
+                        capabilityInvocation: [],
+                    },
+                    services: [],
+                },
             },
-            services: [],
         },
-        registration: {
-            registryAdmin: admin,
-            registeredAt: '2026-10-29T10:00:00.000Z',
-            updatedAt: '2026-10-29T10:00:00.000Z',
-            versionId: 'demo-version-1',
-            deactivated: false,
-            deactivatedAt: null,
-            source: 'canton-ledger-pqs-demo',
-            integrityEvidence: 'demo-unverified-integrity-evidence',
-            finalityEvidence: 'demo-no-authoritative-finality',
-            meta: { values: {} },
-        },
-        aliases: [],
     })
+    assert.equal('CreateCommand' in command, false)
+})
+
+test('factory disclosure validates exact package and binding, without trusting JSON provenance', () => {
+    for (const [value, id, expected, message] of [
+        [null, factoryId, admin, /object/],
+        [disclosure, '', admin, /contract ID is required/],
+        [
+            { ...disclosure, contractId: 'other' },
+            factoryId,
+            admin,
+            /contract ID does not match/,
+        ],
+        [
+            {
+                ...disclosure,
+                templateId:
+                    'deadbeef:Canton.Network.Did.Demo:DemoDidRegistryFactory',
+            },
+            factoryId,
+            admin,
+            /current demo factory/,
+        ],
+        [
+            { ...disclosure, createdEventBlob: ' ' },
+            factoryId,
+            admin,
+            /createdEventBlob/,
+        ],
+        [
+            { ...disclosure, synchronizerId: '' },
+            factoryId,
+            admin,
+            /synchronizerId/,
+        ],
+        [
+            { ...disclosure, factoryView: { registryAdmin: owner } },
+            factoryId,
+            admin,
+            /view registry admin/,
+        ],
+        [
+            { ...disclosure, registryAdmin: owner },
+            factoryId,
+            admin,
+            /metadata registry admin/,
+        ],
+    ] as const) {
+        assert.throws(
+            () => validateDidFactoryDisclosure(value, id, expected),
+            message
+        )
+    }
+    assert.deepEqual(
+        validateDidFactoryDisclosure(
+            { ...disclosure, factoryView: { registryAdmin: admin } },
+            factoryId,
+            admin
+        ),
+        disclosure
+    )
 })
 
 test('duplicate visible owner DID is rejected, without claiming ledger-wide uniqueness', () => {
@@ -59,27 +127,31 @@ test('duplicate visible owner DID is rejected, without claiming ledger-wide uniq
     assert.equal(hasVisibleDidForOwner(existing, owner), true)
     assert.equal(hasVisibleDidForOwner(existing, admin), false)
     assert.throws(
-        () => createOwnerDid(owner, admin, existing, new Date()),
+        () => createOwnerDid(owner, admin, existing, factoryId, disclosure),
         /already visible/
     )
 })
 
 test('create rejects invalid owner and unconfirmed or same-party admin', () => {
     assert.throws(
-        () => createOwnerDid('alice', admin, [], new Date()),
+        () => createOwnerDid('alice', admin, [], factoryId, disclosure),
         /Primary party/
     )
     assert.throws(
-        () => createOwnerDid(owner, '', [], new Date()),
+        () => createOwnerDid(owner, '', [], factoryId, disclosure),
         /Registry admin/
     )
     assert.throws(
-        () => createOwnerDid(owner, owner, [], new Date()),
+        () => createOwnerDid(owner, owner, [], factoryId, disclosure),
         /distinct/
     )
     assert.throws(
-        () => createOwnerDid(owner, 'admin', [], new Date()),
+        () => createOwnerDid(owner, 'admin', [], factoryId, disclosure),
         /full Canton Party/
+    )
+    assert.throws(
+        () => createOwnerDid(owner, admin, [], factoryId, null),
+        /disclosure must be an object/
     )
 })
 const document = {

@@ -16,6 +16,7 @@ import {
 import { CopyIconButton } from '@components/ui/CopyIconButton'
 import { PillButton } from '@components/ui/PillButton'
 import { credentialConfig } from '@config/credential-interfaces'
+import { disclosureUrl } from '@services/credential-commands'
 import {
     OfferFieldLabel,
     OfferRowShell,
@@ -24,6 +25,7 @@ import { useDids } from '@hooks/useDids'
 import {
     hasVisibleDidForOwner,
     provisionalDid,
+    validateDidFactoryDisclosure,
     type DidDocument,
 } from '@services/dids'
 import { emptyVisibilityMessage } from '@services/visibility-message'
@@ -40,6 +42,10 @@ export function DidsPanel() {
         useDids()
     const [open, setOpen] = useState(false)
     const [registryAdmin, setRegistryAdmin] = useState('')
+    const [factoryContractId, setFactoryContractId] = useState('')
+    const [paste, setPaste] = useState('')
+    const [disclosure, setDisclosure] = useState<unknown>(null)
+    const [loadingDisclosure, setLoadingDisclosure] = useState(false)
     const [acknowledged, setAcknowledged] = useState(false)
     const [actionError, setActionError] = useState('')
     const [success, setSuccess] = useState('')
@@ -48,11 +54,61 @@ export function DidsPanel() {
     const validAdmin =
         /^[^\s:]+::[^\s:]+$/.test(registryAdmin.trim()) &&
         registryAdmin.trim() !== partyId
+    const providerUrl =
+        validAdmin && registryAdmin.trim() === credentialConfig.registryAdmin
+            ? credentialConfig.disclosureBaseUrl
+            : ''
+    let validDisclosure = null
+    let disclosureError = ''
+    if (disclosure) {
+        try {
+            validDisclosure = validateDidFactoryDisclosure(
+                disclosure,
+                factoryContractId,
+                registryAdmin.trim()
+            )
+        } catch (cause) {
+            disclosureError =
+                cause instanceof Error ? cause.message : String(cause)
+        }
+    }
+
+    const loadDisclosure = async () => {
+        setActionError('')
+        setDisclosure(null)
+        setLoadingDisclosure(true)
+        try {
+            const response = await fetch(
+                disclosureUrl(providerUrl, factoryContractId.trim())
+            )
+            if (!response.ok)
+                throw new Error(
+                    `Factory disclosure fetch failed: HTTP ${response.status}`
+                )
+            const value: unknown = await response.json()
+            setDisclosure(
+                validateDidFactoryDisclosure(
+                    value,
+                    factoryContractId,
+                    registryAdmin.trim()
+                )
+            )
+        } catch (cause) {
+            setActionError(
+                cause instanceof Error ? cause.message : String(cause)
+            )
+        } finally {
+            setLoadingDisclosure(false)
+        }
+    }
 
     const close = () => {
         if (create.isPending) return
         setOpen(false)
         setRegistryAdmin('')
+        setFactoryContractId('')
+        setPaste('')
+        setDisclosure(null)
         setAcknowledged(false)
         setActionError('')
     }
@@ -61,7 +117,11 @@ export function DidsPanel() {
         if (!partyId) return
         setActionError('')
         try {
-            await create.mutateAsync(registryAdmin)
+            await create.mutateAsync({
+                registryAdmin,
+                factoryContractId,
+                disclosure: validDisclosure,
+            })
             setSuccess(provisionalDid(partyId))
             setOpen(false)
             setRegistryAdmin('')
@@ -106,7 +166,7 @@ export function DidsPanel() {
             )}
             {success && (
                 <Alert severity="success">
-                    Self-asserted DID submitted: {success}. The DID list is
+                    Factory-mediated DID registered: {success}. The DID list is
                     refreshing.
                 </Alert>
             )}
@@ -136,10 +196,11 @@ export function DidsPanel() {
                     sx={{ display: 'grid', gap: 2, overflowWrap: 'anywhere' }}
                 >
                     <Alert severity="warning">
-                        This is a self-asserted local demo registration, NOT
-                        publication or approval by the registry admin. The
-                        did:canton method is provisional. No public resolution
-                        or authoritative verification is provided.
+                        Registration uses an administrator-signed factory. The
+                        factory policy co-signs the record; there is no
+                        per-record review. The did:canton method is provisional
+                        and no public DID resolver is provided on wallet
+                        LocalNet.
                     </Alert>
                     <Typography>
                         Owner and sole controller (primary Party): {partyId}
@@ -148,9 +209,12 @@ export function DidsPanel() {
                         Provisional DID: {provisionalDid(partyId)}
                     </Typography>
                     <Typography variant="body2">
-                        Registry admin is a descriptive demo observer only.
-                        Selecting a Party here does not obtain its consent. No
-                        verification methods, services or aliases are included.
+                        Select the expected registry administrator. Its factory
+                        must be explicitly disclosed to the owner. The admin can
+                        archive the record but cannot edit its content. This
+                        flow supplies no verification methods, services or
+                        aliases; document update and deactivation are
+                        unavailable.
                     </Typography>
                     {credentialConfig.registryAdmin && (
                         <PillButton
@@ -171,8 +235,76 @@ export function DidsPanel() {
                             setRegistryAdmin(event.target.value)
                         }
                         error={!!registryAdmin && !validAdmin}
-                        helperText="Required, distinct from owner; descriptive metadata only. Enter or explicitly select a configured Party."
+                        helperText="Required, distinct from owner. Enter or explicitly select a configured Party."
                     />
+                    <TextField
+                        label="DID registry factory contract ID"
+                        value={factoryContractId}
+                        onChange={(event) => {
+                            setFactoryContractId(event.target.value)
+                            setDisclosure(null)
+                        }}
+                        helperText="Obtain this ID and its disclosure from the registry admin."
+                    />
+                    <Typography variant="body2">
+                        Disclosure source:{' '}
+                        {providerUrl ||
+                            'No admin URL configured for this Party; paste disclosure JSON.'}
+                    </Typography>
+                    {providerUrl && (
+                        <PillButton
+                            tone="neutral"
+                            disabled={
+                                !factoryContractId.trim() || loadingDisclosure
+                            }
+                            onClick={() => void loadDisclosure()}
+                        >
+                            Fetch admin factory disclosure
+                        </PillButton>
+                    )}
+                    <TextField
+                        label="Paste DID factory disclosure JSON"
+                        multiline
+                        minRows={4}
+                        value={paste}
+                        onChange={(event) => {
+                            setPaste(event.target.value)
+                            setDisclosure(null)
+                        }}
+                    />
+                    <PillButton
+                        tone="neutral"
+                        disabled={!paste.trim()}
+                        onClick={() => {
+                            setActionError('')
+                            try {
+                                setDisclosure(
+                                    validateDidFactoryDisclosure(
+                                        JSON.parse(paste),
+                                        factoryContractId,
+                                        registryAdmin.trim()
+                                    )
+                                )
+                            } catch (cause) {
+                                setDisclosure(null)
+                                setActionError(
+                                    cause instanceof Error
+                                        ? cause.message
+                                        : String(cause)
+                                )
+                            }
+                        }}
+                    >
+                        Use pasted disclosure
+                    </PillButton>
+                    <Alert severity={validDisclosure ? 'success' : 'info'}>
+                        {validDisclosure
+                            ? 'Factory disclosure structurally matches the ID and package. Blob provenance and admin signature cannot be independently verified here; the ledger checks the disclosed contract and expectedRegistryAdmin.'
+                            : 'Requires package-ID templateId, contractId, non-empty createdEventBlob and synchronizerId. A JSON claim alone does not prove administrator provenance.'}
+                    </Alert>
+                    {disclosureError && (
+                        <Alert severity="error">{disclosureError}</Alert>
+                    )}
                     <FormControlLabel
                         control={
                             <Checkbox
@@ -182,12 +314,13 @@ export function DidsPanel() {
                                 }
                             />
                         }
-                        label="I understand this is self-asserted local demo metadata, not registry-admin-approved publication."
+                        label="I understand factory policy signs registration without per-record admin review; the disclosure source is not authenticated by this wallet."
                     />
                     {actionError && (
                         <Alert severity="error">
-                            DID creation failed (check demo package vetting and
-                            owner permissions): {actionError}
+                            DID creation failed (check factory disclosure,
+                            package vetting and owner permissions):{' '}
+                            {actionError}
                         </Alert>
                     )}
                 </DialogContent>
@@ -202,6 +335,7 @@ export function DidsPanel() {
                     <PillButton
                         disabled={
                             !validAdmin ||
+                            !validDisclosure ||
                             !acknowledged ||
                             duplicate ||
                             create.isPending
