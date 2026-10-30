@@ -28,7 +28,9 @@ import {
  * whatever the worker count.
  */
 export default async function globalSetup(config: FullConfig): Promise<void> {
-    await fundValidatorOperator()
+    if (process.env.CI || process.env.DID_E2E_SKIP_VALIDATOR_FUND !== '1') {
+        await fundValidatorOperator()
+    }
 
     const workerUsers = Array.from({ length: config.workers }, (_, index) =>
         gatewayUserForWorker(index)
